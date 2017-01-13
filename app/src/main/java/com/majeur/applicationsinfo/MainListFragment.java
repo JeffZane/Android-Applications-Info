@@ -1,5 +1,6 @@
 package com.majeur.applicationsinfo;
 
+import android.Manifest;
 import android.app.ActionBar;
 import android.app.Activity;
 import android.app.ListFragment;
@@ -11,14 +12,16 @@ import android.content.pm.IPackageStatsObserver;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageStats;
+import android.content.pm.ProviderInfo;
 import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.RemoteException;
+import android.support.v4.app.ActivityCompat;
 import android.text.Spannable;
+import android.text.TextUtils;
 import android.text.format.Formatter;
 import android.text.style.BackgroundColorSpan;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -33,9 +36,13 @@ import android.widget.ImageView;
 import android.widget.SearchView;
 import android.widget.SectionIndexer;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.majeur.applicationsinfo.utils.Utils;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.text.Collator;
@@ -109,7 +116,8 @@ public class MainListFragment extends ListFragment implements AdapterView.OnItem
         getListView().setOnItemClickListener(this);
         getListView().setFastScrollEnabled(true);
 
-        mAdapter = new Adapter(mActivity);
+        mPackageManager = getActivity().getPackageManager();
+        mAdapter = new Adapter(mActivity, mPackageManager);
         setListAdapter(mAdapter);
 
         getLoaderManager().initLoader(0, null, this);
@@ -130,7 +138,116 @@ public class MainListFragment extends ListFragment implements AdapterView.OnItem
         startRetrievingPackagesSize();
 
         mProgressDialog.dismiss();
+
+//        new AsyncTask<Void, Void, Void>() {
+//            @Override
+//            protected Void doInBackground(Void... params) {
+//                printContentProvider();
+//                return null;
+//            }
+//        }.execute();
     }
+
+    // ===>
+    private static final int REQUEST_EXTERNAL_STORAGE = 1;
+    private static String[] PERMISSIONS_STORAGE = {
+            Manifest.permission.READ_EXTERNAL_STORAGE,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE};
+    private PackageManager mPackageManager;
+
+    public void verifyStoragePermissions(Activity activity) {
+        // Check if we have write permission
+        int permission = ActivityCompat.checkSelfPermission(activity,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE);
+
+        if (permission != PackageManager.PERMISSION_GRANTED) {
+            // We don't have permission so prompt the user
+            ActivityCompat.requestPermissions(activity, PERMISSIONS_STORAGE,
+                    REQUEST_EXTERNAL_STORAGE);
+        }
+    }
+
+    private void printContentProvider() {
+        verifyStoragePermissions(getActivity());
+
+        try {
+            File file = new File(mActivity.getExternalCacheDir(), "authority.txt");
+            if (file.exists()) {
+                final boolean delete = file.delete();
+                mActivity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(mActivity, "delete " + delete, Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+            FileWriter writer = new FileWriter(file, true);
+
+            for (int i = 0; i < mItemList.size(); i++) {
+                ApplicationItem item = mItemList.get(i);
+                String packageName = item.applicationInfo.packageName;
+                PackageInfo packageInfo = getPackageInfo(i, packageName);
+                if (packageInfo != null) {
+                    // print app name + pkg...
+                    String label = i + "." + item.label.replaceAll("\\s*", "") + " (" + packageName + "):";
+                    if (!TextUtils.isEmpty(label)) {
+                        writer.write(label);
+                        writer.write("\r\n");
+                    }
+
+                    ProviderInfo[] providerInfos = packageInfo.providers;
+                    if (providerInfos != null) {
+                        for (ProviderInfo providerInfo : providerInfos) {
+                            String authority = providerInfo.authority;
+                            // print authority...
+                            if (!TextUtils.isEmpty(authority)) {
+                                writer.write(authority);
+                                writer.write("\r\n");
+                            }
+                        }
+                    } else {
+                        writer.write("null");
+                        writer.write("\r\n");
+                    }
+                    writer.write("\r\n");
+                }
+            }
+
+            writer.close();
+            mActivity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(mActivity, "write over", Toast.LENGTH_SHORT).show();
+                }
+            });
+        } catch (IOException e) {
+            e.printStackTrace();
+            mActivity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(mActivity, "write error", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+    }
+
+    private PackageInfo getPackageInfo(final int i, String packageName) {
+        try {
+            return mPackageManager.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS
+                    | PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS | PackageManager.GET_PROVIDERS
+                    | PackageManager.GET_SERVICES | PackageManager.GET_URI_PERMISSION_PATTERNS
+                    | PackageManager.GET_SIGNATURES | PackageManager.GET_CONFIGURATIONS);
+        } catch (final Exception e) {
+            mActivity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(mActivity, i + ". getPackageInfo() error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            });
+            return null;
+        }
+    }
+    // <===
 
     @Override
     public void onLoaderReset(Loader<List<ApplicationItem>> loader) {
@@ -334,10 +451,10 @@ public class MainListFragment extends ListFragment implements AdapterView.OnItem
         private int mColorGrey1;
         private int mColorGrey2;
 
-        Adapter(Activity activity) {
+        Adapter(Activity activity, PackageManager packageManager) {
             mActivity = activity;
             mLayoutInflater = activity.getLayoutInflater();
-            mPackageManager = activity.getPackageManager();
+            this.mPackageManager = packageManager;
 
             mColorGrey1 = activity.getResources().getColor(R.color.grey_1);
             mColorGrey2 = activity.getResources().getColor(R.color.grey_2);
@@ -443,7 +560,7 @@ public class MainListFragment extends ListFragment implements AdapterView.OnItem
             if (mConstraint != null && item.label.toLowerCase().contains(mConstraint))
                 holder.label.setText(getHighlightedText(item.label));
             else
-                holder.label.setText(item.label);
+                holder.label.setText(i + "." + item.label);
 
             if (mConstraint != null && info.packageName.contains(mConstraint))
                 holder.packageName.setText(getHighlightedText(info.packageName));
